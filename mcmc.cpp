@@ -25,18 +25,27 @@ class Point {
   public: int x,y;
 };
 
-double likelihood(const CImg<unsigned char> &image, const CImg<unsigned char> &target, vector<Point> Uxy, int K) {
+double likelihood(const CImg<unsigned char> &image,
+  const CImg<unsigned char> &target, vector<Point> Uxy, int K) {
+
   int x = image.height();
   int y = image.width();
 
-  CImg<unsigned char> It(128,128);
+  CImg<unsigned char> It(128,128); // XXX: warning, hardcoded image dims here
   It.fill(0);
 
+  // draw our target points on the image
   for (int i=0; i<K; i++) {
     It(Uxy[i].x, Uxy[i].y) = 1;
   }
 
-  CImg<unsigned char> Ie=-It.get_convolve(target, 0, false).get_threshold(128).get_normalize(129,193);
+  // convolve the target circle with the points (basically draws the target
+  // at each point), then threshold the image, normalize black to 129, white
+  // to 193, and invert so target areas are 63 and non-target areas are 127
+  CImg<unsigned char> Ie = -It
+    .get_convolve(target, 0, false)
+    .get_threshold(128)
+    .get_normalize(129,193);
 
   double mse = image.MSE(Ie);
 
@@ -81,7 +90,8 @@ int main() {
   // show figure
   imtemp.display(main_disp, 0);
 
-  obj_fn[0] = likelihood(image, target, Oxy, num_objs[0]) * pdf(pd,num_objs[0]);
+  obj_fn[0] = likelihood(image, target, Oxy, num_objs[0])
+                * pdf(pd,num_objs[0]);
 
   for (int i=1; i<sampling_steps; i++) {
     // start time
