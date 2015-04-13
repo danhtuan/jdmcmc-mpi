@@ -52,8 +52,6 @@ int main() {
 
   float white[3] = {255,255,255};
 
-  imtemp = image;
-
   CImgDisplay main_disp(image,"Figure 1");
 
   int rows = image.height();
@@ -72,32 +70,34 @@ int main() {
   boost::mt19937 rng;
   boost::uniform_int<> randrow(0,rows-1); // [0,rows-1]
   boost::uniform_int<> randcol(0,cols-1); // [0,cols-1]
+  boost::uniform_int<> jump(0,2);
 
+  imtemp = image;
   for (int i=0; i < num_objs[0]; i++) {
     Oxy[i].x = randrow(rng);
     Oxy[i].y = randcol(rng);
     imtemp.draw_circle(Oxy[i].x, Oxy[i].y, 9, white, 0.9f, 1);
   }
+  // show figure
   imtemp.display(main_disp, 0);
 
-  // show figure
   obj_fn[0] = likelihood(image, target, Oxy, num_objs[0]) * pdf(pd,num_objs[0]);
 
   for (int i=1; i<sampling_steps; i++) {
     // start time
-    double a=1.0;// = rand(1); // (0,1)
-    printf("Iteration[%02u]--a:[%1.2f]", i, a);
-    if (a<0.33 && num_objs[i-1] > 1) {
+    int a=jump(rng);
+    printf("Iteration[%02u]--a:[%d]", i, a);
+    if (a==0 && num_objs[i-1] > 1) {
       printf("--Jump-1");
       num_objs[i] = num_objs[i-1] - 1;
-    } else if (a<0.66 && num_objs[i-1] < max_objects) {
+    } else if (a==1 && num_objs[i-1] < max_objects) {
       printf("--Jump+1");
       num_objs[i] = num_objs[i-1] + 1;
     } else {
       printf("--Jump+0");
       num_objs[i] = num_objs[i-1];
     }
-    printf("--Discs:[%02u]\r", num_objs[i]);
+    printf("--Discs:[%02u]\n", num_objs[i]);
 
     // gibbs sampling
     // accept/reject
