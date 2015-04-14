@@ -36,8 +36,8 @@ double likelihood(const CImg<unsigned char> &image,
   It.fill(0);
 
   // draw our target points on the image
-  for (int i=0; i<K; i++) {
-    It(Uxy[i].x, Uxy[i].y) = 1;
+  for (auto it = Uxy.begin(); it != Uxy.end(); it++) {
+    It(it->x, it->y) = 1;
   }
 
   // convolve the target circle with the points (basically draws the target
@@ -56,7 +56,7 @@ double likelihood(const CImg<unsigned char> &image,
 }
 
 Point gen_random_point(int width, int height) {
-  static boost::mt19937 rng;
+  static boost::mt19937 rng; // needs to be static to maintain state
   boost::uniform_int<> randcol(0,width-1);
   boost::uniform_int<> randrow(0,height-1);
 
@@ -90,8 +90,9 @@ int main() {
   imtemp = image;
   vector<Point> Oxy;
   for (int i=0; i < num_objs[0]; i++) {
-    Oxy.push_back(gen_random_point(rows,cols));
-    imtemp.draw_circle(Oxy.back().x, Oxy.back().y, 9, white, 0.9f, 1);
+    Point point = gen_random_point(rows,cols);
+    Oxy.push_back(point);
+    imtemp.draw_circle(point.x, point.y, 9, white, 0.9f, 1);
   }
   // show figure
   imtemp.display(main_disp, 0);
