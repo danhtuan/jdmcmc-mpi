@@ -3,10 +3,13 @@
 #include <fstream>
 #include <cmath>
 
-// rng & poisson distribution
+// rng & normal/poisson distribution
 #include <boost/random/uniform_int.hpp>
 #include <boost/random/mersenne_twister.hpp>
+#include <boost/random/normal_distribution.hpp>
+#include <boost/random/variate_generator.hpp>
 #include <boost/math/distributions/poisson.hpp>
+
 
 // image processing & display
 #include "CImg.h"
@@ -21,10 +24,13 @@ int init_k = 19;
 int M_BURN_IN = 3;
 int STEP_BURN_IN = 2;
 
+// XXX: make this selectable via command line arguments
+boost::mt19937 gen;
+// boost::mt19937 gen(time(0)); // seeded version
+
 struct Point {
   int x,y;
 };
-
 
 double likelihood(const CImg<unsigned char> &image,
   const CImg<unsigned char> &target, vector<Point> Uxy, int K) {
@@ -56,14 +62,65 @@ double likelihood(const CImg<unsigned char> &image,
 }
 
 Point gen_random_point(int width, int height) {
-  static boost::mt19937 rng; // needs to be static to maintain state
-  boost::uniform_int<> randcol(0,width-1);
-  boost::uniform_int<> randrow(0,height-1);
+  using namespace boost;
 
-  return Point{randrow(rng), randcol(rng)};
+  variate_generator<mt19937&, uniform_int<> >
+    randcol(gen, uniform_int<>(0,width-1));
+  variate_generator<mt19937&, uniform_int<> >
+    randrow(gen, uniform_int<>(0,height-1));
+
+  return Point{randrow(), randcol()};
 }
 
-int main() {
+int clamp(int x, int min, int max) {
+  return (x<min) ? min : (x>max) ? max : x; 
+}
+
+Point clamp(Point p, int w, int h) {
+  p.x = clamp(p.x, 0, w-1);
+  p.y = clamp(p.y, 0, h-1);
+  return p; 
+}
+
+double random_normal() {
+  boost::variate_generator<boost::mt19937&, boost::normal_distribution<> >
+    normal(gen, boost::normal_distribution<>(0.0,1.0));
+  return normal();
+}
+
+void gibbs_sampling(const CImg<unsigned char> &image,
+  const CImg<unsigned char> &target, int num_objs) {
+  int T=50, M_BURN_IN = 50, N_BURN_IN = 2, K_MAX = 50;
+  int rows = image.width();
+  int cols = image.height();
+
+  printf("\n\t\tGibbs:[Step/Discs-100/25]");
+
+  // want AOxy = num_objs*x * T
+  // random points in first set of AOxy
+  // Cur_Oxy = first AOxy
+  // show pic here maybe
+  vector<Point> AOxy (T), Cur_Oxy;
+  double L1 = likelihood(image,target,AOxy,num_objs);
+
+  for (int t=1; t<T; t++) {
+    for (int i=0; i<num_objs; i++) {
+      printf("\b\b\b\b\b\b\b%03u/%02u", t, i);
+      Point Oxy;// = Cur_Oxy[i];
+      Oxy.x = 64; Oxy.y = 64;
+      for (int j=0; j<K_MAX; j++) {
+        Point Dxy = Oxy;
+        // note: matlab version uses round()
+        Dxy.x += int(random_normal()*20);
+        Dxy.y += int(random_normal()*20);
+        Dxy = clamp(Dxy,rows,cols);
+        //printf("%d %d\n",Dxy.x,Dxy.y);
+      }
+    }
+  }
+}
+
+int main(int argc, char *argv[]) {
   CImg<unsigned char> image("images/discs20.bmp"), imtemp;
   CImg<unsigned char> target("images/target.bmp");
   boost::math::poisson_distribution<> pd(lambda);
@@ -114,9 +171,9 @@ int main() {
       printf("--Jump+0");
       num_objs[i] = num_objs[i-1];
     }
-    printf("--Discs:[%02u]\n", num_objs[i]);
+    printf("--Discs:[%02u]", num_objs[i]);
 
-    // gibbs sampling
+    gibbs_sampling(image,target,num_objs[i]);
     // accept/reject
     // obj_fn[i] = likelihood() * poisspdf();
 
