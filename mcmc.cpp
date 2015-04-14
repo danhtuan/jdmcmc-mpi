@@ -21,9 +21,10 @@ int init_k = 19;
 int M_BURN_IN = 3;
 int STEP_BURN_IN = 2;
 
-class Point {
-  public: int x,y;
+struct Point {
+  int x,y;
 };
+
 
 double likelihood(const CImg<unsigned char> &image,
   const CImg<unsigned char> &target, vector<Point> Uxy, int K) {
@@ -54,6 +55,14 @@ double likelihood(const CImg<unsigned char> &image,
   return exp(-0.5*mse);
 }
 
+Point gen_random_point(int width, int height) {
+  static boost::mt19937 rng;
+  boost::uniform_int<> randcol(0,width-1);
+  boost::uniform_int<> randrow(0,height-1);
+
+  return Point{randrow(rng), randcol(rng)};
+}
+
 int main() {
   CImg<unsigned char> image("images/discs20.bmp"), imtemp;
   CImg<unsigned char> target("images/target.bmp");
@@ -72,20 +81,17 @@ int main() {
   num_objs[0] = init_k;
 
   vector<double> obj_fn (sampling_steps);
-  vector<Point> Oxy (num_objs[0]);
   double pa_jump;
 
   // init rng
   boost::mt19937 rng;
-  boost::uniform_int<> randrow(0,rows-1); // [0,rows-1]
-  boost::uniform_int<> randcol(0,cols-1); // [0,cols-1]
   boost::uniform_int<> jump(0,2);
 
   imtemp = image;
+  vector<Point> Oxy;
   for (int i=0; i < num_objs[0]; i++) {
-    Oxy[i].x = randrow(rng);
-    Oxy[i].y = randcol(rng);
-    imtemp.draw_circle(Oxy[i].x, Oxy[i].y, 9, white, 0.9f, 1);
+    Oxy.push_back(gen_random_point(rows,cols));
+    imtemp.draw_circle(Oxy.back().x, Oxy.back().y, 9, white, 0.9f, 1);
   }
   // show figure
   imtemp.display(main_disp, 0);
