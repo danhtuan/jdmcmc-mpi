@@ -29,19 +29,21 @@ boost::mt19937 gen;
 // boost::mt19937 gen(time(0)); // seeded version
 
 CImgDisplay main_disp(128,128,"Main",0);
-float white[3] = {255,255,255};
+unsigned char white[1] = {255};
 
 struct Point {
   int x,y;
 };
 
-double likelihood(const CImg<unsigned char> &image,
-  const CImg<unsigned char> &target, vector<Point> Uxy, int K) {
+typedef CImg<unsigned char> Img; 
+
+double likelihood(const Img &image,
+  const Img &target, vector<Point> Uxy, int K) {
 
   int x = image.height();
   int y = image.width();
 
-  CImg<unsigned char> Ie(128,128,1,3,0); // XXX: warning, hardcoded image dims here
+  Img Ie(128,128,1,1,0); // XXX: warning, hardcoded image dims here
 
   for (auto it = Uxy.begin(); it != Uxy.end(); it++) {
     Ie.draw_image(it->x-9, it->y-9, target, target, 255);
@@ -89,9 +91,9 @@ double random_normal() {
   return normal();
 }
 
-vector<Point> gibbs_sampling(const CImg<unsigned char> &image,
-  const CImg<unsigned char> &target, int num_objs) {
-  CImg<unsigned char> imtemp;
+vector<Point> gibbs_sampling(const Img &image,
+  const Img &target, int num_objs) {
+  Img imtemp;
   int T=50, K_MAX = 50;
   int rows = image.width();
   int cols = image.height();
@@ -123,7 +125,6 @@ vector<Point> gibbs_sampling(const CImg<unsigned char> &image,
         double v = min(1.0,L2/L1);
         double u = random_uniform();
         if (v > u) {
-          printf("%.5f %.5f\n", v, u);
           Oxy = Dxy;
           Cur_Oxy = New_Cur_Oxy;
           L1 = L2;
@@ -144,8 +145,10 @@ vector<Point> gibbs_sampling(const CImg<unsigned char> &image,
 }
 
 int main(int argc, char *argv[]) {
-  CImg<unsigned char> image("images/discs20.bmp"), imtemp;
-  CImg<unsigned char> target("images/target.bmp");
+  Img image_load("images/discs20.bmp"), image, imtemp;
+  Img target_load("images/target.bmp"), target;
+  image = image_load.channel(0);
+  target = target_load.channel(0);
   boost::math::poisson_distribution<> pd(lambda);
 
   int rows = image.height();
@@ -213,6 +216,7 @@ int main(int argc, char *argv[]) {
     printf("\n");
   }
   // step 3 - burn in
+  printf("Burning to get Experimental Result...\n");
   // step 4 - mean estimate of object number k*
   printf("\nProgram Exit\n");
   return 0;
