@@ -20,15 +20,18 @@ using namespace cimg_library;
 int lambda = 20;
 int sampling_steps = 20;
 int max_objects = 25;
-int init_k = 19;
+int init_k;
 int M_BURN_IN = 3;
 int STEP_BURN_IN = 2;
 
-// XXX: make this selectable via command line arguments
+int width;
+int height;
+
+// XXX: make this selectable via command line arguments ?
 boost::mt19937 gen;
 // boost::mt19937 gen(time(0)); // seeded version
 
-CImgDisplay main_disp(128,128,"Main",0);
+CImgDisplay main_disp;
 double white[1] = {1.0};
 
 struct Point {
@@ -36,15 +39,12 @@ struct Point {
 };
 
 typedef CImg<double> Img; 
-Img black(128,128,1,1,0); // XXX: warning, hardcoded image dims here
+Img black;
 
 double likelihood(const Img &image,
   const Img &target, vector<Point> Uxy, int K) {
 
-  int x = image.height();
-  int y = image.width();
-
-  Img Ie(128,128,1,1,0); // XXX: warning, hardcoded image dims here
+  Img Ie(width,height,1,1,0);
 
   for (auto it = Uxy.begin(); it != Uxy.end(); it++) {
     Ie.draw_image(it->x-9, it->y-9, target, target, 1.0);
@@ -52,7 +52,7 @@ double likelihood(const Img &image,
 
   Ie = (image + Ie*0.25)-0.5;
 
-  double mse = Ie.MSE(black)*128*128; // note: gibbs is sensitive to this
+  double mse = Ie.MSE(black)*width*height; // note: gibbs is sensitive to this
   double like = exp(-0.5*mse);
 
   return like;
@@ -97,29 +97,28 @@ vector<Point> gibbs_sampling(const Img &image,
   const Img &target, int num_objs) {
   Img imtemp;
   int T=50, K_MAX = 50;
-  int rows = image.width();
-  int cols = image.height();
 
-  printf("/n\t\tGibbs:[Step/Discs-100/25]");
+  printf("\n\t\tGibbs:[Step-100]");
 
   vector<vector<Point>> AOxy (T);
 
   for (int i=0; i < num_objs; i++) {
-    Point point = gen_random_point(rows,cols);
+    Point point = gen_random_point(height,width);
     AOxy[0].push_back(point);
   }
   vector<Point> Cur_Oxy = AOxy[0];
   double L1 = likelihood(image,target,Cur_Oxy,num_objs);
 
   for (int t=1; t<T; t++) {
-    printf("%03u\n", t);
+    printf("\b\b\b\b%03u]", t);
+    cout.flush();
     for (int i=0; i<num_objs; i++) {
       Point Oxy = Cur_Oxy[i];
       for (int j=0; j<K_MAX; j++) {
         Point Dxy = Oxy;
         Dxy.x += round(random_normal()*20);
         Dxy.y += round(random_normal()*20);
-        Dxy = clamp(Dxy,rows,cols);
+        Dxy = clamp(Dxy,height,width);
         vector<Point> New_Cur_Oxy = Cur_Oxy;
         New_Cur_Oxy[i] = Dxy;
         double L2 = likelihood(image,target,New_Cur_Oxy,num_objs);
@@ -141,12 +140,16 @@ vector<Point> gibbs_sampling(const Img &image,
       }
       imtemp.display(main_disp);
   }
-  printf("Done Gibbs");
+  printf("\nDone Gibbs");
   return Cur_Oxy;
 }
 
 int main(int argc, char *argv[]) {
-  Img image_load("images/discs20.bmp"), image, imtemp;
+  cimg_usage("command line arguments");
+  const char *filename = cimg_option("-f",(char*)0,"Input image filename");
+  init_k   = cimg_option("-n", 19,"Number of initial targets");
+ 
+  Img image_load(filename), image, imtemp;
   Img target_load("images/target.bmp"), target;
   image = image_load.channel(0);
   target = target_load.channel(0);
@@ -157,10 +160,13 @@ int main(int argc, char *argv[]) {
 
   boost::math::poisson_distribution<> pd(lambda);
 
-  int rows = image.height();
-  int cols = image.width();
+  height = image.height();
+  width = image.width();
 
-  printf("Image is %d x %d\n", cols, rows);
+  main_disp = CImgDisplay(width,height,"Main",0);
+  black = Img(width,height,1,1,0);
+
+  printf("Image is %d x %d\n", width, height);
 
   vector<int> num_objs (sampling_steps);
   num_objs[0] = init_k;
@@ -169,14 +175,14 @@ int main(int argc, char *argv[]) {
 
   // init rng
   boost::mt19937 rng;
-  boost::uniform_int<> jump(0,2);
+  boost::uniform_int<> jump(-1,1);
 
   main_disp.set_normalization(1);
 
   imtemp = image;
   vector<vector<Point>> Oxy (sampling_steps);
   for (int i=0; i < num_objs[0]; i++) {
-    Point point = gen_random_point(rows,cols);
+    Point point = gen_random_point(height,width);
     Oxy[0].push_back(point);
     imtemp.draw_circle(point.x, point.y, 9, white, 0.9f, 1);
   }
@@ -191,7 +197,7 @@ int main(int argc, char *argv[]) {
     // start time
     int a=jump(rng);
     printf("Iteration[%02u]--a:[%d]", i, a);
-    if (a==0 && num_objs[i-1] > 1) {
+    if (a==-1 && num_objs[i-1] > 1) {
       printf("--Jump-1");
       num_objs[i] = num_objs[i-1] - 1;
     } else if (a==1 && num_objs[i-1] < max_objects) {
@@ -208,12 +214,13 @@ int main(int argc, char *argv[]) {
     obj_fn[i] = likelihood(image, target, Oxy[i], num_objs[i])
                 * pdf(pd,num_objs[i]);
     double pa_jump = min(obj_fn[i]/obj_fn[i-1], 1.0);
-    printf("\n\t\tOBJ_FN:[%d]--AcceptRate:[%2.2f]",obj_fn[i], pa_jump);
-    if (pa_jump > random_uniform()) {
-      printf("--Accept");
+    printf("\n\t\tOBJ_FN:[%.5e]--AcceptRate:[%2.2f]",obj_fn[i], pa_jump);
+    double u0 = random_uniform();
+    if (pa_jump > u0) {
+      printf("--Accept %2.2f > %2.2f", pa_jump, u0);
       // add video frame ?
     } else {
-      printf("--Reject");
+      printf("--Reject %2.2f <= %2.2f", pa_jump, u0);
       // duplicate previous step
       num_objs[i] = num_objs[i-1];
       Oxy[i] = Oxy[i-1];
@@ -242,7 +249,13 @@ int main(int argc, char *argv[]) {
       K_BI_AOxy.push_back(BI_AOxy[i]);
   }
   int num_sp = K_BI_AOxy.size();
-
+  // reorder_samples
+  // compute mean of samples (and round), final result
+  // print final result
+  // render final result
+  // plot objects vs iteration
+  // plot objective function vs iteration
+  // render result w/best objective function
   printf("\nProgram Exit\n");
   return 0;
 }
