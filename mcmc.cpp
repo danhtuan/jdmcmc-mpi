@@ -29,13 +29,14 @@ boost::mt19937 gen;
 // boost::mt19937 gen(time(0)); // seeded version
 
 CImgDisplay main_disp(128,128,"Main",0);
-unsigned char white[1] = {255};
+double white[1] = {1.0};
 
 struct Point {
   int x,y;
 };
 
-typedef CImg<unsigned char> Img; 
+typedef CImg<double> Img; 
+Img black(128,128,1,1,0); // XXX: warning, hardcoded image dims here
 
 double likelihood(const Img &image,
   const Img &target, vector<Point> Uxy, int K) {
@@ -46,11 +47,12 @@ double likelihood(const Img &image,
   Img Ie(128,128,1,1,0); // XXX: warning, hardcoded image dims here
 
   for (auto it = Uxy.begin(); it != Uxy.end(); it++) {
-    Ie.draw_image(it->x-9, it->y-9, target, target, 255);
+    Ie.draw_image(it->x-9, it->y-9, target, target, 1.0);
   }
-  Ie = -Ie.normalize(129,193);
-  
-  double mse = image.MSE(Ie); // note: gibbs is sensitive to this
+
+  Ie = (image + Ie*0.25)-0.5;
+
+  double mse = Ie.MSE(black)*128*128; // note: gibbs is sensitive to this
   double like = exp(-0.5*mse);
 
   return like;
@@ -110,14 +112,13 @@ vector<Point> gibbs_sampling(const Img &image,
   double L1 = likelihood(image,target,Cur_Oxy,num_objs);
 
   for (int t=1; t<T; t++) {
+    printf("%03u\n", t);
     for (int i=0; i<num_objs; i++) {
-      printf("%03u/%02u\n", t, i);
       Point Oxy = Cur_Oxy[i];
       for (int j=0; j<K_MAX; j++) {
         Point Dxy = Oxy;
-        // note: matlab version uses round()
-        Dxy.x += int(random_normal()*20);
-        Dxy.y += int(random_normal()*20);
+        Dxy.x += round(random_normal()*20);
+        Dxy.y += round(random_normal()*20);
         Dxy = clamp(Dxy,rows,cols);
         vector<Point> New_Cur_Oxy = Cur_Oxy;
         New_Cur_Oxy[i] = Dxy;
@@ -132,13 +133,13 @@ vector<Point> gibbs_sampling(const Img &image,
       }
       AOxy[t] = Cur_Oxy;
 
+    }
       // show image
       imtemp = image;
       for (int n=0; n < num_objs; n++) {
         imtemp.draw_circle(Cur_Oxy[n].x, Cur_Oxy[n].y, 9, white, 0.9f, 1);
       }
       imtemp.display(main_disp);
-    }
   }
   printf("Done Gibbs");
   return Cur_Oxy;
@@ -149,6 +150,11 @@ int main(int argc, char *argv[]) {
   Img target_load("images/target.bmp"), target;
   image = image_load.channel(0);
   target = target_load.channel(0);
+
+  // normalize our 256 level grayscale to 0-1 float
+  image /= 256.0;
+  target /= 256.0;
+
   boost::math::poisson_distribution<> pd(lambda);
 
   int rows = image.height();
@@ -165,6 +171,8 @@ int main(int argc, char *argv[]) {
   boost::mt19937 rng;
   boost::uniform_int<> jump(0,2);
 
+  main_disp.set_normalization(1);
+
   imtemp = image;
   vector<vector<Point>> Oxy (sampling_steps);
   for (int i=0; i < num_objs[0]; i++) {
@@ -174,7 +182,6 @@ int main(int argc, char *argv[]) {
   }
   // show figure
   imtemp.display(main_disp);
-
   obj_fn[0] = likelihood(image, target, Oxy[0], num_objs[0])
                 * pdf(pd,num_objs[0]);
 
@@ -217,7 +224,25 @@ int main(int argc, char *argv[]) {
   }
   // step 3 - burn in
   printf("Burning to get Experimental Result...\n");
+  vector<vector<Point>> BI_AOxy, K_BI_AOxy;
+  vector<int> bi_num_obj;
+  int num_obj_sum = 0, final_num_obj, nsteps=0;
+  for(int i=M_BURN_IN-1; i<sampling_steps; i+=STEP_BURN_IN) {
+    BI_AOxy.push_back(Oxy[i]);
+    bi_num_obj.push_back(num_objs[i]);
+    num_obj_sum += num_objs[i];
+    nsteps++;
+  } 
   // step 4 - mean estimate of object number k*
+  final_num_obj = round((float)num_obj_sum / nsteps);
+  printf("Number of objects: %02u\n", final_num_obj);
+
+  for (int i=0; i<BI_AOxy.size(); i++) {
+    if (bi_num_obj[i] == final_num_obj)
+      K_BI_AOxy.push_back(BI_AOxy[i]);
+  }
+  int num_sp = K_BI_AOxy.size();
+
   printf("\nProgram Exit\n");
   return 0;
 }
