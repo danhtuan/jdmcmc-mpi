@@ -1,4 +1,4 @@
-CC=g++
+CC=mpic++
 CFLAGS=-std=c++0x -lm -lX11 -lpthread
 
 all: mcmc 
@@ -14,5 +14,6 @@ ci: create_image.o
 
 clean:
 	rm mcmc ci *.o 
+
 gibbs: gibbs.o
 	$(CC) $(CFLAGS) -o gibbs gibbs.o
