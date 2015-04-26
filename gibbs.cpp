@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
+#include <mpi.h>
 
 // rng & normal/poisson distribution
 #include <boost/random/uniform_int.hpp>
@@ -21,22 +22,31 @@ int lambda = 20;
 int sampling_steps = 20;
 int max_objects = 25;
 int init_k;
-int M_BURN_IN = 3;
-int STEP_BURN_IN = 2;
+int M_BURN_IN = 50;
+int STEP_BURN_IN = 5;
 
 int width;
 int height;
 
 // XXX: make this selectable via command line arguments ?
 boost::mt19937 gen;
-// boost::mt19937 gen(time(0)); // seeded version
+//boost::mt19937 gen(time(0)); // seeded version
 
 CImgDisplay main_disp;
 double white[1] = {1.0};
+int world_size, world_rank;
+char processor_name[MPI_MAX_PROCESSOR_NAME];
 
 struct Point {
   int x,y;
 };
+
+typedef struct {
+  double val;
+  int rank;
+} MAXLOC;
+
+MAXLOC maxloc, r_maxloc;
 
 typedef CImg<double> Img; 
 Img black;
@@ -46,15 +56,14 @@ double likelihood(const Img &image,
 
   Img Ie(width,height,1,1,0);
 
-  for (auto it = Uxy.begin(); it != Uxy.end(); it++) {
-    Ie.draw_image(it->x-9, it->y-9, target, target, 1.0);
+  for (int i=0; i < K; i++) {
+    Ie.draw_image(Uxy[i].x-9, Uxy[i].y-9, target, target, 1.0);
   }
 
   Ie = (image + Ie*0.25)-0.5;
 
   double mse = Ie.MSE(black)*width*height; // note: gibbs is sensitive to this
   double like = exp(-0.5*mse);
-
   return like;
 }
 
@@ -94,164 +103,176 @@ double random_normal() {
 }
 
 vector<Point> gibbs_sampling(const Img &image,
-  const Img &target, int num_objs) {
-  Img imtemp;
-  int T=150, K_MAX = 150;
-
-  printf("\n\t\tGibbs:[Step-100]");
+  const Img &target, int num_objs, vector<Point> Oxy,
+  const int max_iterations) {
+  int T = max_iterations;
+  //if (world_rank == 0) printf("\n\t\tGibbs:[Step-100]");
 
   vector<vector<Point>> AOxy (T);
-
-  for (int i=0; i < num_objs; i++) {
-    Point point = gen_random_point(height,width);
-    AOxy[0].push_back(point);
-  }
+  AOxy[0] = Oxy;
   vector<Point> Cur_Oxy = AOxy[0];
   double L1 = likelihood(image,target,Cur_Oxy,num_objs);
 
-  for (int t=1; t<T; t++) {
-    printf("\b\b\b\b%03u]", t);
-    cout.flush();
+  for (int t=0; t<T; t++) {
+    /*if (world_rank == 0)
+      printf("\b\b\b\b%03u]", t);
+    cout.flush();*/
     for (int i=0; i<num_objs; i++) {
       Point Oxy = Cur_Oxy[i];
-      for (int j=0; j<K_MAX; j++) {
-        Point Dxy = Oxy;
-        Dxy.x += round(random_normal()*20);
-        Dxy.y += round(random_normal()*20);
-        Dxy = clamp(Dxy,height,width);
-        vector<Point> New_Cur_Oxy = Cur_Oxy;
-        New_Cur_Oxy[i] = Dxy;
-        double L2 = likelihood(image,target,New_Cur_Oxy,num_objs);
-        double v = min(1.0,L2/L1);
-        double u = random_uniform();
-        if (v > u) {
-          Oxy = Dxy;
-          Cur_Oxy = New_Cur_Oxy;
-          L1 = L2;
-        }
+      Point Dxy = Oxy;
+      Dxy.x += round(random_normal()*20);
+      Dxy.y += round(random_normal()*20);
+      Dxy = clamp(Dxy,height,width);
+      vector<Point> New_Cur_Oxy = Cur_Oxy;
+      New_Cur_Oxy[i] = Dxy;
+      double L2 = likelihood(image,target,New_Cur_Oxy,num_objs);
+      double v = min(1.0,L2/L1);
+      double u = random_uniform();
+      if (v > u) {
+        Oxy = Dxy;
+        Cur_Oxy = New_Cur_Oxy;
+        L1 = L2;
       }
       AOxy[t] = Cur_Oxy;
-
     }
-      // show image
-      imtemp = image;
-      for (int n=0; n < num_objs; n++) {
-        imtemp.draw_circle(Cur_Oxy[n].x, Cur_Oxy[n].y, 9, white, 0.9f, 1);
-      }
-      imtemp.display(main_disp);
   }
-  printf("\nDone Gibbs");
+  //if (world_rank==0) printf("\nDone Gibbs\n");
   return Cur_Oxy;
 }
 
+void init_mpi() {
+    // Get the number of processes
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+
+    // Get the rank of the process
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    
+    // Get the name of the processor
+    int name_len;
+    MPI_Get_processor_name(processor_name, &name_len);
+}
+
 int main(int argc, char *argv[]) {
+  MPI_Init(&argc, &argv);
+  init_mpi();
+  
   cimg_usage("command line arguments");
   const char *filename = cimg_option("-f",(char*)0,"Input image filename");
-  init_k   = cimg_option("-n", 19,"Number of initial targets");
+  init_k = cimg_option("-n", 19,"Number of initial targets");
+  const int max_iterations = cimg_option("-i", 100,"Number of iterations per broadcast loop");
+  const int max_gibbs_iterations = cimg_option("-g", 100,"Number of iterations per gibbs sampling loop");
+  int image_size, target_size;
  
-  Img image_load(filename), image, imtemp;
-  Img target_load("images/target.bmp"), target;
-  image = image_load.channel(0);
-  target = target_load.channel(0);
+  Img image(128,128,1,1), imtemp, target(19,19,1,1);
+  if (world_rank == 0) { 
+    Img image_load(filename), imtemp;
+    Img target_load("images/target.bmp");
+    image = image_load.channel(0);
+    target = target_load.channel(0);
 
-  // normalize our 256 level grayscale to 0-1 float
-  image /= 256.0;
-  target /= 256.0;
+    // normalize our 256 level grayscale to 0-1 float
+    image /= 256.0;
+    target /= 256.0;
+
+    image_size = image.size();
+    target_size = target.size();
+  }  
+
+  MPI_Bcast(&image_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&target_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  MPI_Bcast(image, image_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  MPI_Bcast(target, target_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
   boost::math::poisson_distribution<> pd(lambda);
 
   height = image.height();
   width = image.width();
+  printf("%s %d: %d x %d\n", processor_name, world_rank, width, height);
 
-  main_disp = CImgDisplay(width,height,"Main",0);
+  if (world_rank == 0)
+    main_disp = CImgDisplay(width,height,"Main",0);
   black = Img(width,height,1,1,0);
 
-  printf("Image is %d x %d\n", width, height);
+  if (world_rank == 0)
+    printf("Image is %d x %d\n", width, height);
 
-  vector<int> num_objs (sampling_steps);
-  num_objs[0] = init_k;
+  int num_objs = init_k;
 
-  vector<double> obj_fn (sampling_steps);
+  double obj_fn;
 
   // init rng
   boost::mt19937 rng;
+  gen.seed(time(0)+world_rank*100); // avoid overlapping times across machines
   boost::uniform_int<> jump(-1,1);
 
-  main_disp.set_normalization(1);
+  if (world_rank == 0)
+    main_disp.set_normalization(1);
 
   imtemp = image;
-  vector<vector<Point>> Oxy (sampling_steps);
-  for (int i=0; i < num_objs[0]; i++) {
+  vector<Point> Oxy (init_k);
+
+  for (int i=0; i < num_objs; i++) {
     Point point = gen_random_point(height,width);
-    Oxy[0].push_back(point);
-    imtemp.draw_circle(point.x, point.y, 9, white, 0.9f, 1);
+    Oxy.push_back(point);
+    if (world_rank == 0)
+      imtemp.draw_circle(point.x, point.y, 9, white, 0.9f, 1);
   }
+
   // show figure
-  imtemp.display(main_disp);
-  obj_fn[0] = likelihood(image, target, Oxy[0], num_objs[0])
-                * pdf(pd,num_objs[0]);
+  if (world_rank == 0)
+    imtemp.display(main_disp);
+  obj_fn = likelihood(image, target, Oxy, num_objs);// * pdf(pd,num_objs);
 
-  printf("Iteration[%02u]--Discs:[%02u]--OBJ_FN:[%.5e]--Duration[%5.5f]\n", 1, num_objs[0], obj_fn[0], 0.0);
-/*
-  for (int i=1; i<sampling_steps; i++) {
-    // start time
-    int a=jump(rng);
-    printf("Iteration[%02u]--a:[%d]", i, a);
-    if (a==-1 && num_objs[i-1] > 1) {
-      printf("--Jump-1");
-      num_objs[i] = num_objs[i-1] - 1;
-    } else if (a==1 && num_objs[i-1] < max_objects) {
-      printf("--Jump+1");
-      num_objs[i] = num_objs[i-1] + 1;
-    } else {
-      printf("--Jump+0");
-      num_objs[i] = num_objs[i-1];
-    }
-    printf("--Discs:[%02u]", num_objs[i]);
+//  if (world_rank == 0)
+    printf("Rank-[%02u]--Discs:[%02u]--OBJ_FN:[%.5e]\n", world_rank, num_objs, obj_fn);
 
-    Oxy[i] = gibbs_sampling(image,target,num_objs[i]);
-    // accept/reject
-    obj_fn[i] = likelihood(image, target, Oxy[i], num_objs[i])
-                * pdf(pd,num_objs[i]);
-    double pa_jump = min(obj_fn[i]/obj_fn[i-1], 1.0);
-    printf("\n\t\tOBJ_FN:[%.5e]--AcceptRate:[%2.2f]",obj_fn[i], pa_jump);
-    double u0 = random_uniform();
-    if (pa_jump > u0) {
-      printf("--Accept %2.2f > %2.2f", pa_jump, u0);
-      // add video frame ?
-    } else {
-      printf("--Reject %2.2f <= %2.2f", pa_jump, u0);
-      // duplicate previous step
-      num_objs[i] = num_objs[i-1];
-      Oxy[i] = Oxy[i-1];
-      obj_fn[i] = obj_fn[i-1];
-    }
-    //printf("--Duration:[%3.3f]\n", timeblah);
-    printf("\n");
-  }
-  // step 3 - burn in
-  printf("Burning to get Experimental Result...\n");
-  vector<vector<Point>> BI_AOxy, K_BI_AOxy;
-  vector<int> bi_num_obj;
-  int num_obj_sum = 0, final_num_obj, nsteps=0;
-  for(int i=M_BURN_IN-1; i<sampling_steps; i+=STEP_BURN_IN) {
-    BI_AOxy.push_back(Oxy[i]);
-    bi_num_obj.push_back(num_objs[i]);
-    num_obj_sum += num_objs[i];
-    nsteps++;
-  } 
-  // step 4 - mean estimate of object number k*
-  final_num_obj = round((float)num_obj_sum / nsteps);
-  printf("Number of objects: %02u\n", final_num_obj);
+  vector<Point> Best_Oxy, CurBest_Oxy;
+  double best_obj = -1.0;
+for (int i=0; i<max_iterations; i++) {
+  Oxy = gibbs_sampling(image, target, num_objs, Oxy, max_gibbs_iterations);
+  //obj_fn = likelihood(image, target, Oxy, num_objs) * pdf(pd,num_objs);
+  obj_fn = likelihood(image, target, Oxy, num_objs);
+  
+  maxloc.val = obj_fn;
+  maxloc.rank = world_rank;
+  // everyone figures out which process has the best obj function value
+  MPI_Allreduce( &maxloc, &r_maxloc, 1, MPI_DOUBLE_INT, MPI_MAXLOC, MPI_COMM_WORLD );
 
-  for (int i=0; i<BI_AOxy.size(); i++) {
-    if (bi_num_obj[i] == final_num_obj)
-      K_BI_AOxy.push_back(BI_AOxy[i]);
+  // the process with the best obj function value is the 4th arg here, it will be
+  // the one that broadcasts its points list to the others
+  CurBest_Oxy = Oxy;
+  MPI_Bcast( &CurBest_Oxy.front(), num_objs*2, MPI_INT, r_maxloc.rank, MPI_COMM_WORLD );
+  if (obj_fn/r_maxloc.val > random_uniform()) {
+    Oxy = CurBest_Oxy;
   }
 
-  int num_sp = K_BI_AOxy.size();
-*/
-Oxy[0] = gibbs_sampling(image, target, num_objs[0]);
+  if (world_rank == 0) {
+    printf("Best: %d %.5e\n", r_maxloc.rank, r_maxloc.val);
+    if (r_maxloc.val > best_obj) {
+      printf("^^ New winner ^^\n", r_maxloc.rank, r_maxloc.val);
+      best_obj = r_maxloc.val;
+      Best_Oxy = Oxy;
+      // show image
+      imtemp = image;
+      for (int n=0; n < num_objs; n++) {
+        imtemp.draw_circle(Oxy[n].x, Oxy[n].y, 9, white, 0.9f, 1);
+      }
+    } 
+    Img imtemp2 = image;
+    for (int n=0; n < num_objs; n++) {
+      imtemp2.draw_circle(CurBest_Oxy[n].x, CurBest_Oxy[n].y, 9, white, 0.9f, 1);
+    }
+    main_disp.resize(256,128);
+    (imtemp,imtemp2).display(main_disp);
+  }
+}
+
+  if (world_rank == 0) {
+    printf("Showing best\n");
+    main_disp.resize(512,512);
+    imtemp.display(main_disp,0);
+  }
   // reorder_samples
   // compute mean of samples (and round), final result
   // print final result
@@ -259,6 +280,18 @@ Oxy[0] = gibbs_sampling(image, target, num_objs[0]);
   // plot objects vs iteration
   // plot objective function vs iteration
   // render result w/best objective function
-  printf("\nProgram Exit\n");
+
+  double mpi_obj_fn[36]; // XXX: hardcoded to our world max
+  MPI_Gather( &obj_fn, 1, MPI_DOUBLE, mpi_obj_fn, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD );
+
+  MPI_Finalize();
+
+  if (world_rank == 0) {
+    printf("Best: %.5e\n", best_obj);
+    for (int i=0; i<num_objs; i++)
+      printf("%d %d\n", Best_Oxy[i].x, Best_Oxy[i].y);
+    printf("\nProgram Exit\n");
+  }
+
   return 0;
 }
