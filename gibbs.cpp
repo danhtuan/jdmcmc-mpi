@@ -56,15 +56,14 @@ double likelihood(const Img &image,
 
   Img Ie(width,height,1,1,0);
 
-  for (auto it = Uxy.begin(); it != Uxy.end(); it++) {
-    Ie.draw_image(it->x-9, it->y-9, target, target, 1.0);
+  for (int i=0; i < K; i++) {
+    Ie.draw_image(Uxy[i].x-9, Uxy[i].y-9, target, target, 1.0);
   }
 
   Ie = (image + Ie*0.25)-0.5;
 
   double mse = Ie.MSE(black)*width*height; // note: gibbs is sensitive to this
   double like = exp(-0.5*mse);
-
   return like;
 }
 
@@ -219,6 +218,7 @@ int main(int argc, char *argv[]) {
     if (world_rank == 0)
       imtemp.draw_circle(point.x, point.y, 9, white, 0.9f, 1);
   }
+
   // show figure
   if (world_rank == 0)
     imtemp.display(main_disp);
