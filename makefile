@@ -14,3 +14,5 @@ ci: create_image.o
 
 clean:
 	rm mcmc ci *.o 
+gibbs: gibbs.o
+	$(CC) $(CFLAGS) -o gibbs gibbs.o
