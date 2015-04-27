@@ -1,5 +1,5 @@
 CC=mpic++
-CFLAGS=-std=c++0x -lm -lX11 -lpthread
+CFLAGS=-O3 -std=c++0x -lm -lX11 -lpthread
 
 all: mcmc 
 
