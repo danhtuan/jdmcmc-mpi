@@ -21,16 +21,11 @@
 using namespace std;
 using namespace cimg_library;
 
-int lambda = 20;
-int sampling_steps = 20;
-int max_objects = 25;
 int init_k;
-int M_BURN_IN = 50;
-int STEP_BURN_IN = 5;
-
 int width;
 int height;
 
+// will be initialized in main with time+world_rank*n
 boost::mt19937 gen;
 
 CImgDisplay main_disp;
@@ -64,8 +59,8 @@ double likelihood(const Img &image,
 
   Ie = (image + Ie*0.25)-0.5;
 
-  double mse = Ie.MSE(black)*width*height; // note: gibbs is sensitive to this
-  double like = exp(-0.5*mse);
+  double sse = Ie.MSE(black)*width*height; // note: gibbs is sensitive to this
+  double like = exp(-0.5*sse);
   return like;
 }
 
@@ -246,8 +241,6 @@ int main(int argc, char *argv[]) {
 
   MPI_Bcast(image, image_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
   MPI_Bcast(target, target_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-  boost::math::poisson_distribution<> pd(lambda);
 
   height = image.height();
   width = image.width();
